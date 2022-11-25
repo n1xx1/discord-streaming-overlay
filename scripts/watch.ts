@@ -18,7 +18,10 @@ build({
           console.log("built!");
           if (e.errors.length > 0) return;
           const text = produceManifest() + e.outputFiles![0].text;
-          await writeFile(path.join(outFolder, "test.plugin.js"), text);
+          await writeFile(
+            path.join(outFolder, "DiscordStreamingOverlay.plugin.js"),
+            text
+          );
         });
       },
     },
@@ -27,7 +30,7 @@ build({
 
 function produceManifest() {
   return `/**
- * @name PluginOrThemeName
+ * @name DiscordStreamingOverlay
  * @version 0.0.1
  * @description Just a simple description of the content that may
  * end up being pretty long

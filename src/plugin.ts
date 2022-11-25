@@ -1,21 +1,46 @@
-import OBSWebSocket from "obs-websocket-js";
-import { OBSRequestTypes, OBSResponseTypes } from "./obs-types";
+import OBSWebSocket, {
+  OBSRequestTypes,
+  OBSResponseTypes,
+} from "obs-websocket-js";
+import { genearteSettingsTemplate } from "./settings-template";
 
-const address = "ws://127.0.0.1:4444";
-const password = "92sRowmvd6Y9GDxn";
+const pluginName = "DiscordStreamingOverlay";
 
-export = class ExamplePlugin {
+const defaultSettings = {
+  sceneName: "DiscordOverlay",
+  websocketAddress: "ws://127.0.0.1:4444",
+  websocketPassword: "",
+};
+
+export = class StreamingOverlayPlugin {
   obs = new OBSWebSocket();
   popoutWindowStore: any;
   connected = false;
   popoutInterval: number | null = null;
 
+  settingsDom: HTMLElement | null = null;
+  settingsDomSceneName: HTMLInputElement | null = null;
+  settingsDomWebsocketAddress: HTMLInputElement | null = null;
+  settingsDomWebsocketPassword: HTMLInputElement | null = null;
+
+  settings: {
+    sceneName: string;
+    websocketAddress: string;
+    websocketPassword: string;
+  } | null = null;
+
   start() {
     this.popoutWindowStore = BdApi.findModule(
-      (f: any) => f.default.constructor.persistKey == "PopoutWindowStore"
-    ).default;
+      (f) => f?.constructor?.persistKey == "PopoutWindowStore"
+    );
     this.popoutWindowStore.addChangeListener(
       this.handlePopoutWindowStoreChanged
+    );
+
+    this.settings = Object.assign(
+      {},
+      defaultSettings,
+      BdApi.loadData(pluginName, "settings")
     );
 
     this.obs.on("ConnectionOpened", () => {
@@ -23,14 +48,18 @@ export = class ExamplePlugin {
       this.connected = true;
     });
     this.obs.on("ConnectionClosed", (e) => {
-      console.log("connection closed");
+      console.log("connection closed", e.code, e.message);
       this.connected = false;
+      if (e.code !== 1000) {
+        setTimeout(() => this.tryConnect(), 1500);
+      }
     });
     this.obs.on("ConnectionError", (e) => {
-      setTimeout(() => this.tryConnect(), 500);
+      console.log("connection error");
     });
     this.tryConnect();
   }
+
   stop() {
     this.popoutWindowStore.removeChangeListener(
       this.handlePopoutWindowStoreChanged
@@ -42,27 +71,120 @@ export = class ExamplePlugin {
     delete (this as any).obs;
   }
 
+  onSettingsSceneNameBlur = () => {
+    if (this.settings!.sceneName !== this.settingsDomSceneName!.value) {
+      this.settings!.sceneName = this.settingsDomSceneName!.value;
+      BdApi.saveData(pluginName, "settings", this.settings);
+    }
+  };
+
+  onSettingsWebsocketAddressBlur = async () => {
+    if (
+      this.settings!.websocketAddress !==
+      this.settingsDomWebsocketAddress!.value
+    ) {
+      this.settings!.websocketAddress = this.settingsDomWebsocketAddress!.value;
+      BdApi.saveData(pluginName, "settings", this.settings);
+      if (this.connected) {
+        await this.obs.disconnect();
+        this.tryConnect();
+      }
+    }
+  };
+
+  onSettingsWebsocketPasswordBlur = async () => {
+    if (
+      this.settings!.websocketPassword !==
+      this.settingsDomWebsocketPassword!.value
+    ) {
+      this.settings!.websocketPassword =
+        this.settingsDomWebsocketPassword!.value;
+      BdApi.saveData(pluginName, "settings", this.settings);
+      if (this.connected) {
+        await this.obs.disconnect();
+        this.tryConnect();
+      }
+    }
+  };
+
+  getSettingsPanel() {
+    this.settingsDom ??= (() => {
+      const tpl = genearteSettingsTemplate();
+
+      this.settingsDomSceneName = tpl.querySelector(
+        "#discordStreamingOverlaySettingsSceneName"
+      )!;
+      this.settingsDomWebsocketAddress = tpl.querySelector(
+        "#discordStreamingOverlaySettingsWebsocketAddress"
+      )!;
+      this.settingsDomWebsocketPassword = tpl.querySelector(
+        "#discordStreamingOverlaySettingsWebsocketPassword"
+      )!;
+
+      this.settingsDomSceneName.addEventListener(
+        "blur",
+        this.onSettingsSceneNameBlur
+      );
+      this.settingsDomWebsocketAddress.addEventListener(
+        "blur",
+        this.onSettingsWebsocketAddressBlur
+      );
+      this.settingsDomWebsocketPassword.addEventListener(
+        "blur",
+        this.onSettingsWebsocketPasswordBlur
+      );
+
+      return tpl;
+    })();
+
+    this.settingsDomSceneName!.value = this.settings!.sceneName;
+    this.settingsDomWebsocketAddress!.value = this.settings!.websocketAddress;
+    this.settingsDomWebsocketPassword!.value = this.settings!.websocketPassword;
+
+    return this.settingsDom;
+  }
+
   async tryConnect() {
     try {
-      await this.obs.connect(address, password);
+      console.log(
+        this.settings!.websocketAddress,
+        this.settings!.websocketPassword
+      );
+      await this.obs.connect(
+        this.settings!.websocketAddress,
+        this.settings!.websocketPassword
+      );
     } catch (e) {}
   }
 
+  async findInputByName(inputKind: string, inputName: string) {
+    const { inputs } = await this.obsCall("GetInputList", { inputKind });
+    return inputs.find((i: any) => i.inputName == inputName) ?? null;
+  }
+
   async findInput(sceneName: string, windowName: string) {
-    const { inputs } = await this.obsCall("GetInputList", {
-      inputKind: "window_capture",
-    });
-    const discordObs: any = inputs.find(
-      (i: any) => i.inputName == "DiscordObs"
-    );
+    let discordObs = await this.findInputByName("window_capture", "DiscordObs");
+
+    if (!discordObs) {
+      await this.obsCall("CreateInput", {
+        sceneName,
+        inputName: "DiscordObs",
+        inputKind: "window_capture",
+        sceneItemEnabled: false,
+        inputSettings: {
+          window: `${windowName}:Chrome_WidgetWin_1:Discord.exe`,
+        },
+      });
+      return await this.findInputByName("window_capture", "DiscordObs");
+    }
 
     const expectedWindowName = `${windowName}:Chrome_WidgetWin_1:Discord.exe`;
     const inputSettings = await this.obsCall("GetInputSettings", {
-      inputName: discordObs.inputName,
+      inputName: discordObs.inputName as string,
     });
     if (inputSettings.inputSettings.window !== expectedWindowName) {
       await this.obsCall("SetInputSettings", {
-        inputName: discordObs.inputName,
+        inputName: discordObs.inputName as string,
         inputSettings: {
           window: `${windowName}:Chrome_WidgetWin_1:Discord.exe`,
         },
@@ -70,10 +192,6 @@ export = class ExamplePlugin {
     }
 
     return discordObs;
-  }
-
-  async recreateWindowSource() {
-    return null;
   }
 
   obsCall<Type extends keyof OBSRequestTypes>(
@@ -86,15 +204,22 @@ export = class ExamplePlugin {
   async handleVideos(popup: Window, videos: Element[]) {
     if (!this.connected) return;
 
-    const sceneName = "DiscordOverlay";
+    const sceneName = this.settings!.sceneName;
     const discordObs = await this.findInput(sceneName, popup.document.title);
+
+    if (!discordObs) {
+      // failed to create
+      return;
+    }
 
     const { sceneItems } = await this.obsCall("GetSceneItemList", {
       sceneName,
     });
 
-    const targets = sceneItems.filter((x) =>
-      x.sourceName.startsWith("DiscordSource_")
+    const targets = sceneItems.filter(
+      (x) =>
+        typeof x.sourceName === "string" &&
+        x.sourceName.startsWith("DiscordSource_")
     );
     const expectedVideos: {
       name: string;
@@ -125,10 +250,10 @@ export = class ExamplePlugin {
         name,
         bounds: { top, bottom, left, right },
         target: {
-          x: sceneItemTransform.positionX,
-          y: sceneItemTransform.positionY,
-          width: sceneItemTransform.width,
-          height: sceneItemTransform.height,
+          x: sceneItemTransform.positionX as number,
+          y: sceneItemTransform.positionY as number,
+          width: sceneItemTransform.width as number,
+          height: sceneItemTransform.height as number,
         },
       });
     }
@@ -143,28 +268,26 @@ export = class ExamplePlugin {
     for (const video of oldVideos) {
       const enabled = await this.obsCall("GetSceneItemEnabled", {
         sceneName,
-        sceneItemId: video.id,
+        sceneItemId: video.id as number,
       });
       video.enabled = enabled.sceneItemEnabled;
     }
 
-    let realSource = oldVideos.find((x) => !x.enabled)?.id;
+    let realSource = oldVideos.find((x) => !x.enabled)!.id as number;
     oldVideos = oldVideos.filter((x) => x.id !== realSource);
 
-    if (!realSource) {
-      // TODO!
-      // realSource = await this.recreateWindowSource();
-    }
-
     for (const { id } of oldVideos.slice(expectedVideos.length)) {
-      await this.obsCall("RemoveSceneItem", { sceneName, sceneItemId: id });
+      await this.obsCall("RemoveSceneItem", {
+        sceneName,
+        sceneItemId: id as number,
+      });
     }
 
     for (let i = 0; i < expectedVideos.length; i++) {
       const { bounds, target } = expectedVideos[i];
       const sceneItemId =
         oldVideos.length > i
-          ? oldVideos[i].id
+          ? (oldVideos[i].id as number)
           : await this.duplicateSource(sceneName, realSource!);
 
       const {
@@ -200,7 +323,17 @@ export = class ExamplePlugin {
         sceneItemId,
         sceneItemTransform,
       });
+      await this.obsCall("SetSceneItemLocked", {
+        sceneName,
+        sceneItemId,
+        sceneItemLocked: true,
+      });
     }
+    await this.obsCall("SetSceneItemLocked", {
+      sceneName,
+      sceneItemId: realSource,
+      sceneItemLocked: true,
+    });
   }
 
   async duplicateSource(sceneName: string, sceneItemId: number) {
@@ -248,6 +381,7 @@ export = class ExamplePlugin {
       element.sheet?.insertRule(
         `[class*=tile-] [class*=border-], [class*=tile-] [class*=overlay-2RIWoZ] { display: none; }`
       );
+      element.sheet?.insertRule(`[class*=videoControls-] { display: none; }`);
 
       const func = () => {
         const videos = popup.document.querySelectorAll(
