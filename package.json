@@ -1,12 +1,16 @@
 {
   "scripts": {
-    "watch": "esbuild --bundle --platform=node --external:esbuild --outfile=tmp/watch.js --log-level=error scripts/watch.ts && node tmp/watch.js"
+    "build:builder": "esbuild --bundle --platform=node --external:esbuild --outfile=tmp/build.js --log-level=error scripts/build.ts",
+    "build": "npm run build:builder && node tmp/build.js build",
+    "watch": "npm run build:builder && node tmp/build.js watch"
   },
   "devDependencies": {
     "@types/bandagedbd__bdapi": "^0.3.4",
     "@types/node": "^18.11.9",
+    "@types/yargs": "^17.0.14",
     "esbuild": "^0.15.15",
-    "typescript": "^4.9.3"
+    "typescript": "^4.9.3",
+    "yargs": "^17.6.2"
   },
   "dependencies": {
     "obs-websocket-js": "^5.0.2"
